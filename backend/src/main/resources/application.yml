@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: mini-exchange
+  datasource:
+    url: jdbc:postgresql://localhost:5436/exchange
+    username: app
+    password: app
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  mvc:
+    async:
+      request-timeout: -1   # market data streams stay open
+
+exchange:
+  depth-levels: 10
+  bot:
+    interval: 250ms
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
