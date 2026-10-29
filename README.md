@@ -36,6 +36,19 @@ Each symbol has its own order book and a single thread that owns it. Orders for 
 - **Partial fills** on both sides.
 - **Self-trade prevention.** If an order would match one of the same trader's resting orders, the resting order is cancelled instead. Trading with yourself is wash trading.
 
+## Pre-trade risk checks
+
+Every order goes through `PreTradeRisk` before it reaches the book. A blocked order is saved as `REJECTED` with the rule and the numbers that stopped it, so there's a record of every attempt, and the API returns 422.
+
+| Rule | Default | What it stops |
+|---|---|---|
+| `MAX_QUANTITY` | 50,000 shares | An extra zero on the quantity |
+| `MAX_NOTIONAL` | 1,000,000 CAD | One order worth more than the desk should risk at once. Market orders are valued at the last trade price |
+| `PRICE_BAND` | 10% from the last trade | A limit price typed as 4200 instead of 42.00. Not applied until a stock has traded |
+| `ORDER_RATE` | 30 orders per 10 s per trader | A runaway script or a bot stuck in a loop |
+
+The checks run cheapest first, and the rate check goes last so an order blocked for its size or price doesn't use up the trader's allowance. A trader can trade several stocks at once on different threads, so the sliding window for each trader has its own lock. The limits live under `exchange.risk` in `application.yml`, `GET /api/risk/limits` returns them, and `exchange_risk_rejections_total{rule=...}` counts blocks per rule in Prometheus.
+
 ## Settlement and the ledger
 
 Every trader has one account per asset (CAD cash, and shares of each stock). Balances only ever change through ledger transactions made of postings, and each transaction must net to zero per asset. A trade is four postings: the buyer's cash goes down, the seller's cash goes up, the seller's shares go down and the buyer's shares go up.
@@ -63,6 +76,8 @@ The book in memory changes before the database transaction commits. If anything 
 - every account's held amount equals what its open orders reserve
 
 The trading screen runs this every few seconds and shows the result in the footer.
+
+**Scheduled reconciliation.** `ReconciliationJob` runs the same audit every hour and stores each run in `reconciliation_runs` with its time, duration and what failed. The database constraints should make a failure impossible, so a failed run means a bug or someone editing balances by hand. It is logged at ERROR, and the `exchange_ledger_healthy` gauge drops to 0 so an alert can fire. `ReconciliationTest` proves this by changing a balance directly with SQL and checking that the next run catches it and names the account.
 
 ## Running it
 
@@ -93,28 +108,34 @@ The `demo` profile opens three traders (alice, bob, carol) with cash and shares,
 | GET | `/api/traders/{id}/balances` | Balance, held and available per asset |
 | GET | `/api/traders/{id}/orders` | Recent orders |
 | GET | `/api/ledger/check` | Full ledger audit |
+| GET | `/api/ledger/reconciliations` | Last 20 reconciliation runs |
+| POST | `/api/ledger/reconciliations` | Run a reconciliation now |
+| GET | `/api/risk/limits` | Current pre-trade limits |
 
 There's no login here on purpose, to keep the focus on the exchange. Authentication with OAuth2 and JWTs is in my [expense-claims-api](https://github.com/nagarjuna-thumma/expense-claims-api) project.
 
 ## Tests
 
 ```bash
-cd backend && mvn verify     # 26 tests, needs Docker for Testcontainers
+cd backend && mvn verify     # 38 tests, needs Docker for Testcontainers
 cd frontend && npm test      # 8 tests
 ```
 
 - `OrderBookTest` covers the matching rules one by one.
 - `OrderBookRandomizedTest` throws 5,000 random orders and cancels at the book with several seeds, and after every step checks that the book is never crossed, no quantity is created or lost, and no fill breaks a limit price.
 - `ExchangeIntegrationTest` runs against a real Postgres. It checks settlement and holds, rejection of unaffordable orders, cancels, that the database refuses unbalanced or edited postings, and that a rebuilt book matches the live one exactly. One test fires 600 orders from 12 threads across three stocks and then runs the full ledger audit.
+- `PreTradeRiskTest` covers each risk rule with a fixed clock, including the sliding window. `RiskIntegrationTest` checks that a blocked order never touches the book or holds any cash, and that a script sending too fast gets a 422.
+- `ReconciliationTest` edits a balance behind the ledger's back and checks the reconciliation catches it.
 - Front-end tests cover the order ticket's validation and the order book layout.
 
 ## Stack
 
-Java 21 · Spring Boot 3.5 · Spring Data JPA · PostgreSQL 16 · Flyway · Testcontainers · React 19 · TypeScript · Vite · Vitest · GitHub Actions
+Java 21 · Spring Boot 3.5 · Spring Data JPA · Micrometer · PostgreSQL 16 · Flyway · Testcontainers · React 19 · TypeScript · Vite · Vitest · GitHub Actions
 
 ## What I'd do next
 
 - Journal incoming orders to Kafka before matching, so the engine can be replayed and a hot standby can follow it
 - Add stop and IOC/FOK order types
 - Move holds and the ledger check into a separate risk service
-- Add authentication and per-trader rate limits
+- Add authentication
+- Add post-trade surveillance, such as flagging traders who cancel almost every order they place

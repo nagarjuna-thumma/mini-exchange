@@ -17,9 +17,17 @@ exchange:
   depth-levels: 10
   bot:
     interval: 250ms
+  risk:
+    max-quantity: 50000
+    max-notional: 1000000
+    price-band-percent: 10
+    max-orders-per-window: 30
+    window: 10s
+  reconciliation:
+    cron: "0 0 * * * *"   # hourly
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,metrics,prometheus

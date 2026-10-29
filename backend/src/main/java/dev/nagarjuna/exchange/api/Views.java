@@ -42,11 +42,4 @@ final class Views {
 
     record TraderView(UUID id, String username) {
     }
-
-    record AssetTotal(String asset, BigDecimal total) {
-    }
-
-    record LedgerCheck(boolean healthy, List<AssetTotal> totalsByAsset, List<UUID> accountsNotMatchingPostings,
-                       List<UUID> accountsWithWrongHolds) {
-    }
 }
