@@ -3,6 +3,8 @@ package dev.nagarjuna.exchange.order;
 import dev.nagarjuna.exchange.engine.Depth;
 import dev.nagarjuna.exchange.ledger.InsufficientFundsException;
 import dev.nagarjuna.exchange.market.MarketDataHub;
+import dev.nagarjuna.exchange.risk.PreTradeRisk;
+import dev.nagarjuna.exchange.risk.RiskRejection;
 import dev.nagarjuna.exchange.trader.InstrumentRepository;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -11,7 +13,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -22,15 +27,21 @@ public class ExchangeService {
 
     private final OrderProcessor processor;
     private final InstrumentRepository instruments;
+    private final TradeRepository trades;
     private final MarketDataHub marketData;
+    private final PreTradeRisk risk;
     private final int depthLevels;
     private final Map<String, SymbolWorker> workers = new ConcurrentHashMap<>();
+    private final Map<String, BigDecimal> lastPrices = new ConcurrentHashMap<>();
 
-    public ExchangeService(OrderProcessor processor, InstrumentRepository instruments, MarketDataHub marketData,
+    public ExchangeService(OrderProcessor processor, InstrumentRepository instruments, TradeRepository trades,
+                           MarketDataHub marketData, PreTradeRisk risk,
                            @Value("${exchange.depth-levels:10}") int depthLevels) {
         this.processor = processor;
         this.instruments = instruments;
+        this.trades = trades;
         this.marketData = marketData;
+        this.risk = risk;
         this.depthLevels = depthLevels;
     }
 
@@ -40,6 +51,7 @@ public class ExchangeService {
             String symbol = instrument.getSymbol();
             SymbolWorker worker = new SymbolWorker(symbol, processor.rebuild(symbol));
             workers.put(symbol, worker);
+            trades.findFirstBySymbolOrderByIdDesc(symbol).ifPresent(t -> lastPrices.put(symbol, t.getPrice()));
             log.info("Order book for {} rebuilt with {} resting orders", symbol, worker.run(() -> worker.book().size()));
         });
     }
@@ -47,6 +59,11 @@ public class ExchangeService {
     public PlaceOutcome place(PlaceOrderCommand cmd) {
         SymbolWorker worker = worker(cmd.symbol());
         return worker.run(() -> {
+            Optional<RiskRejection> blocked = risk.check(cmd, lastPrices.get(cmd.symbol()));
+            if (blocked.isPresent()) {
+                log.info("Order from trader {} on {} blocked: {}", cmd.traderId(), cmd.symbol(), blocked.get().reason());
+                return processor.reject(cmd, blocked.get().reason());
+            }
             PlaceOutcome outcome;
             try {
                 outcome = processor.place(worker.book(), cmd);
@@ -57,6 +74,9 @@ public class ExchangeService {
             } catch (RuntimeException e) {
                 worker.replaceBook(processor.rebuild(cmd.symbol()));
                 throw e;
+            }
+            if (!outcome.trades().isEmpty()) {
+                lastPrices.put(cmd.symbol(), outcome.trades().get(outcome.trades().size() - 1).getPrice());
             }
             marketData.publish(cmd.symbol(), worker.book().depth(depthLevels), outcome.trades());
             return outcome;
@@ -75,7 +95,7 @@ public class ExchangeService {
                 worker.replaceBook(processor.rebuild(symbol));
                 throw e;
             }
-            marketData.publish(symbol, worker.book().depth(depthLevels), java.util.List.of());
+            marketData.publish(symbol, worker.book().depth(depthLevels), List.of());
             return order;
         });
     }

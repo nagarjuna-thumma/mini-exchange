@@ -35,8 +35,10 @@ import java.util.concurrent.Future;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "spring.flyway.locations=classpath:db/migration,classpath:db/testdata")
+// The crowd test sends about 100 orders per trader at once, far over the normal rate limit.
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+        "spring.flyway.locations=classpath:db/migration,classpath:db/testdata",
+        "exchange.risk.max-orders-per-window=10000"})
 @Import(TestcontainersConfig.class)
 @Testcontainers(disabledWithoutDocker = true)
 class ExchangeIntegrationTest {
