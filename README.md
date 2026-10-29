@@ -119,6 +119,7 @@ There's no login here on purpose, to keep the focus on the exchange. Authenticat
 ```bash
 cd backend && mvn verify     # 38 tests, needs Docker for Testcontainers
 cd frontend && npm test      # 8 tests
+cd frontend && npm run e2e   # 4 end-to-end tests in a real browser, needs Postgres up and the backend jar built
 ```
 
 - `OrderBookTest` covers the matching rules one by one.
@@ -126,11 +127,12 @@ cd frontend && npm test      # 8 tests
 - `ExchangeIntegrationTest` runs against a real Postgres. It checks settlement and holds, rejection of unaffordable orders, cancels, that the database refuses unbalanced or edited postings, and that a rebuilt book matches the live one exactly. One test fires 600 orders from 12 threads across three stocks and then runs the full ledger audit.
 - `PreTradeRiskTest` covers each risk rule with a fixed clock, including the sliding window. `RiskIntegrationTest` checks that a blocked order never touches the book or holds any cash, and that a script sending too fast gets a 422.
 - `ReconciliationTest` edits a balance behind the ledger's back and checks the reconciliation catches it.
+- The Playwright end-to-end tests drive the real trading screen in Chromium against the whole stack: the backend with the demo profile and its market-making bots, and Postgres. They rest a limit order and cancel it, fill a market order against the bots, check that a fat-finger price is stopped by the risk checks, and confirm the ledger check still passes afterwards. CI runs them after the unit tests and keeps a trace of any failure.
 - Front-end tests cover the order ticket's validation and the order book layout.
 
 ## Stack
 
-Java 21 · Spring Boot 3.5 · Spring Data JPA · Micrometer · PostgreSQL 16 · Flyway · Testcontainers · React 19 · TypeScript · Vite · Vitest · GitHub Actions
+Java 21 · Spring Boot 3.5 · Spring Data JPA · Micrometer · PostgreSQL 16 · Flyway · Testcontainers · React 19 · TypeScript · Vite · Vitest · Playwright · GitHub Actions
 
 ## What I'd do next
 
